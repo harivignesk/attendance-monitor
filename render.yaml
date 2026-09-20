@@ -6,6 +6,8 @@ services:
     startCommand: gunicorn app:app
     envVars:
       - key: CAMERA_AVAILABLE
-        value: false
+        value: true
+      - key: CAMERA_URL
+        value: rtsp://admin:password@YOUR_CAMERA_IP:554/stream
       - key: PYTHON_VERSION
         value: 3.11.0

@@ -7,7 +7,13 @@ import database
 import attendance
 import register
 
-# Camera is only available when running locally (not on cloud servers)
+# Camera configuration via environment variables
+# CAMERA_URL: Set to RTSP URL for IP camera e.g. rtsp://admin:password@192.168.1.64:554/stream
+#             Leave blank or '0' to use local USB webcam (index 0)
+# CAMERA_AVAILABLE: Set to 'false' to disable camera entirely (cloud with no camera)
+CAMERA_URL_RAW = os.environ.get('CAMERA_URL', '0').strip()
+CAMERA_URL = int(CAMERA_URL_RAW) if CAMERA_URL_RAW.isdigit() else CAMERA_URL_RAW
+IS_IP_CAMERA = isinstance(CAMERA_URL, str) and (CAMERA_URL.startswith('rtsp://') or CAMERA_URL.startswith('http://'))
 CAMERA_AVAILABLE = os.environ.get('CAMERA_AVAILABLE', 'true').lower() == 'true'
 
 app = Flask(__name__)
@@ -20,21 +26,34 @@ face_matcher = attendance.FastFaceMatcher()
 
 class ThreadedCamera:
     """
-    Asynchronous Camera Reader Thread with MJPEG hardware decoding.
-    Eliminates camera startup lag (<0.2s startup time) and prevents UI freeze.
+    Asynchronous Camera Reader Thread.
+    Supports both local USB webcams and IP cameras via RTSP/HTTP streams.
+    Auto-detects the correct backend (DirectShow for USB, FFMPEG for RTSP/IP).
     """
     def __init__(self, src=0):
         self.src = src
-        self.cap = cv2.VideoCapture(self.src, cv2.CAP_DSHOW)
-        if not self.cap.isOpened():
-            self.cap = cv2.VideoCapture(self.src)
+        self.is_ip = isinstance(src, str) and (src.startswith('rtsp://') or src.startswith('http://'))
 
-        # Hardware MJPEG codec: 10x faster frame transfer from camera chip
-        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-        self.cap.set(cv2.CAP_PROP_FPS, 30)
-        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1) # Zero frame lag
+        if self.is_ip:
+            # RTSP / HTTP IP Camera — use FFMPEG backend (cross-platform)
+            print(f"[Camera] Connecting to IP camera: {src}")
+            self.cap = cv2.VideoCapture(src, cv2.CAP_FFMPEG)
+            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Reduce latency
+        else:
+            # Local USB webcam — try DirectShow first (Windows), fallback to default
+            print(f"[Camera] Opening local webcam (index {src})")
+            self.cap = cv2.VideoCapture(src, cv2.CAP_DSHOW)
+            if not self.cap.isOpened():
+                self.cap = cv2.VideoCapture(src)
+            # Hardware MJPEG codec for faster USB transfer
+            self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+            self.cap.set(cv2.CAP_PROP_FPS, 30)
+            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+        if not self.cap.isOpened():
+            print(f"[Camera] WARNING: Could not open camera source: {src}")
 
         self.grabbed, self.frame = self.cap.read()
         self.stopped = False
@@ -77,7 +96,7 @@ def get_camera_stream():
     if not CAMERA_AVAILABLE:
         return None
     if camera_stream is None or camera_stream.stopped:
-        camera_stream = ThreadedCamera(0)
+        camera_stream = ThreadedCamera(CAMERA_URL)  # Uses env var: CAMERA_URL
     return camera_stream
 
 def release_camera_stream():
@@ -86,13 +105,16 @@ def release_camera_stream():
         camera_stream.release()
         camera_stream = None
 
-def _make_no_camera_frame():
+def _make_no_camera_frame(message_line2="Set CAMERA_URL env variable to connect"):
     """Creates a placeholder JPEG frame when camera is unavailable."""
     import numpy as np
     img = np.zeros((480, 640, 3), dtype=np.uint8)
-    img[:] = (30, 30, 30)
-    cv2.putText(img, "Camera Not Available", (120, 220), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (100, 200, 255), 2)
-    cv2.putText(img, "Run locally for face recognition", (80, 280), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (180, 180, 180), 1)
+    img[:] = (20, 20, 35)
+    # Draw border
+    cv2.rectangle(img, (10, 10), (630, 470), (60, 60, 100), 2)
+    cv2.putText(img, "No Camera Connected", (110, 200), cv2.FONT_HERSHEY_SIMPLEX, 1.1, (100, 200, 255), 2)
+    cv2.putText(img, message_line2, (20, 260), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (160, 160, 160), 1)
+    cv2.putText(img, "e.g. CAMERA_URL=rtsp://admin:pass@192.168.1.x:554/stream", (15, 300), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (100, 180, 100), 1)
     ret, buffer = cv2.imencode('.jpg', img)
     return buffer.tobytes()
 
@@ -232,11 +254,18 @@ def api_export_csv():
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    if CAMERA_AVAILABLE:
-        # Pre-warm camera in background (local only)
-        get_camera_stream()
     print("=" * 60)
     print("AI Face Recognition Attendance Machine Web Server Running!")
     print(f"Open in Browser: http://localhost:{port}")
+    if CAMERA_AVAILABLE:
+        if IS_IP_CAMERA:
+            print(f"Camera Mode : IP Camera (RTSP/HTTP)")
+            print(f"Camera URL  : {CAMERA_URL}")
+        else:
+            print(f"Camera Mode : Local USB Webcam (index {CAMERA_URL})")
+        # Pre-warm camera in background
+        get_camera_stream()
+    else:
+        print("Camera Mode : DISABLED (CAMERA_AVAILABLE=false)")
     print("=" * 60)
     app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
