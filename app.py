@@ -7,6 +7,9 @@ import database
 import attendance
 import register
 
+# Camera is only available when running locally (not on cloud servers)
+CAMERA_AVAILABLE = os.environ.get('CAMERA_AVAILABLE', 'true').lower() == 'true'
+
 app = Flask(__name__)
 
 # Initialize SQLite database
@@ -71,6 +74,8 @@ camera_stream = None
 
 def get_camera_stream():
     global camera_stream
+    if not CAMERA_AVAILABLE:
+        return None
     if camera_stream is None or camera_stream.stopped:
         camera_stream = ThreadedCamera(0)
     return camera_stream
@@ -81,9 +86,35 @@ def release_camera_stream():
         camera_stream.release()
         camera_stream = None
 
+def _make_no_camera_frame():
+    """Creates a placeholder JPEG frame when camera is unavailable."""
+    import numpy as np
+    img = np.zeros((480, 640, 3), dtype=np.uint8)
+    img[:] = (30, 30, 30)
+    cv2.putText(img, "Camera Not Available", (120, 220), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (100, 200, 255), 2)
+    cv2.putText(img, "Run locally for face recognition", (80, 280), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (180, 180, 180), 1)
+    ret, buffer = cv2.imencode('.jpg', img)
+    return buffer.tobytes()
+
 def generate_frames():
     """Generates ultra-fast MJPEG video stream directly from RAM."""
+    if not CAMERA_AVAILABLE:
+        # On cloud servers, return a static placeholder frame
+        frame_bytes = _make_no_camera_frame()
+        while True:
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+            time.sleep(2)
+        return
+
     stream = get_camera_stream()
+    if stream is None:
+        frame_bytes = _make_no_camera_frame()
+        while True:
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+            time.sleep(2)
+        return
 
     while True:
         success, frame = stream.read()
@@ -148,6 +179,9 @@ def api_register_student():
     if not sid or not name:
         return jsonify({'success': False, 'message': 'Student ID and Name are required.'}), 400
 
+    if not CAMERA_AVAILABLE:
+        return jsonify({'success': False, 'message': 'Camera not available on this server. Run locally to register students via webcam.'}), 503
+
     release_camera_stream()
     success, msg = register.capture_student_faces(sid, name, dept, sample_count=5)
     
@@ -197,10 +231,12 @@ def api_export_csv():
     return send_file(filepath, as_attachment=True, download_name="attendance_report.csv")
 
 if __name__ == '__main__':
-    # Pre-warm camera in background
-    get_camera_stream()
+    port = int(os.environ.get('PORT', 5000))
+    if CAMERA_AVAILABLE:
+        # Pre-warm camera in background (local only)
+        get_camera_stream()
     print("=" * 60)
     print("AI Face Recognition Attendance Machine Web Server Running!")
-    print("Open in Browser: http://localhost:5000")
+    print(f"Open in Browser: http://localhost:{port}")
     print("=" * 60)
-    app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
+    app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
