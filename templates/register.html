@@ -1,0 +1,215 @@
+{% extends 'base.html' %}
+
+{% block title %}Register New Student - Face Attendance System{% endblock %}
+
+{% block content %}
+<div class="grid-layout">
+  
+  <!-- Form Section -->
+  <div class="card">
+    <div class="card-title">
+      <span>👤 Student Registration Form</span>
+    </div>
+
+    <form id="registerForm">
+      <div class="form-group">
+        <label for="studentId">Student Roll No / ID *</label>
+        <input type="text" id="studentId" class="form-control" placeholder="e.g. 23AIM001" required>
+      </div>
+
+      <div class="form-group">
+        <label for="studentName">Full Name *</label>
+        <input type="text" id="studentName" class="form-control" placeholder="e.g. Hari Kumar" required>
+      </div>
+
+      <div class="form-group">
+        <label for="department">Department</label>
+        <input type="text" id="department" class="form-control" value="Computer Science">
+      </div>
+
+      <button type="submit" class="btn btn-primary" id="btnRegister" style="width: 100%; margin-top: 1rem;">
+        📷 Capture Face & Save Student
+      </button>
+    </form>
+
+    <div id="statusAlert" style="margin-top: 1.25rem; font-size: 0.9rem; font-weight: 500; display: none;"></div>
+  </div>
+
+  <!-- Camera Live Preview for Registration -->
+  <div class="card">
+    <div class="card-title">
+      <span>📷 Live Camera Preview</span>
+      <span style="font-size: 0.8rem; color: var(--text-muted);">Ensure face is centered</span>
+    </div>
+
+    <div class="video-wrapper">
+      <img src="{{ url_for('video_feed') }}" alt="Registration Live Stream">
+    </div>
+
+    <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 1rem; line-height: 1.5;">
+      ℹ️ The system will automatically capture 5 face samples using the webcam stream and save facial feature vectors to SQLite.
+    </p>
+  </div>
+
+</div>
+
+<!-- Admin Registered Students Directory -->
+<div class="card" style="margin-top: 1.5rem;">
+  <div class="card-title">
+    <span>📂 Registered Students Directory (Admin Management)</span>
+    <span style="font-size: 0.85rem; color: var(--text-muted);" id="studentCountBadge">0 Students</span>
+  </div>
+
+  <div style="margin-bottom: 1rem; max-width: 380px;">
+    <input type="text" id="searchStudent" class="form-control" placeholder="Search by Student ID, Name or Department...">
+  </div>
+
+  <div class="data-table-wrapper">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Student ID</th>
+          <th>Full Name</th>
+          <th>Department</th>
+          <th>Registered Date</th>
+          <th>Admin Action</th>
+        </tr>
+      </thead>
+      <tbody id="studentTableBody">
+        <tr>
+          <td colspan="5" style="text-align: center; color: var(--text-muted);">Loading students list...</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const form = document.getElementById('registerForm');
+  const alertBox = document.getElementById('statusAlert');
+  const btn = document.getElementById('btnRegister');
+  let registeredStudents = [];
+
+  async function loadStudents() {
+    try {
+      const res = await fetch('/api/students');
+      registeredStudents = await res.json();
+      renderStudentsTable(registeredStudents);
+    } catch (err) {
+      console.error('Failed to load students:', err);
+    }
+  }
+
+  function renderStudentsTable(students) {
+    const tbody = document.getElementById('studentTableBody');
+    const badge = document.getElementById('studentCountBadge');
+    badge.textContent = `${students.length} Registered Students`;
+
+    if (!students || students.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: var(--text-muted);">No registered students in database.</td></tr>`;
+      return;
+    }
+
+    tbody.innerHTML = students.map(s => `
+      <tr>
+        <td><strong>${s.student_id}</strong></td>
+        <td>${s.name}</td>
+        <td>${s.department || 'General'}</td>
+        <td>${s.created_at || 'N/A'}</td>
+        <td>
+          <button type="button" class="btn" onclick="confirmDeleteStudent('${s.student_id}', '${s.name.replace(/'/g, "\\'")}')" 
+                  style="padding: 0.35rem 0.75rem; font-size: 0.8rem; background: rgba(239, 68, 68, 0.15); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.3);">
+            🗑️ Remove Student
+          </button>
+        </td>
+      </tr>
+    `).join('');
+  }
+
+  async function confirmDeleteStudent(studentId, name) {
+    const ok = confirm(`⚠️ Are you sure you want to remove student:\n\nID: ${studentId}\nName: ${name}\n\nThis will permanently delete their profile, face samples, and attendance history.`);
+    if (!ok) return;
+
+    try {
+      const res = await fetch('/api/delete_student', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ student_id: studentId })
+      });
+
+      const data = await res.json();
+      if (data.success) {
+        alert('✓ ' + data.message);
+        loadStudents();
+      } else {
+        alert('❌ Error: ' + data.message);
+      }
+    } catch (err) {
+      alert('Failed to contact server to delete student.');
+    }
+  }
+
+  document.getElementById('searchStudent').addEventListener('input', (e) => {
+    const q = e.target.value.toLowerCase().trim();
+    if (!q) {
+      renderStudentsTable(registeredStudents);
+      return;
+    }
+    const filtered = registeredStudents.filter(s =>
+      s.student_id.toLowerCase().includes(q) ||
+      s.name.toLowerCase().includes(q) ||
+      (s.department && s.department.toLowerCase().includes(q))
+    );
+    renderStudentsTable(filtered);
+  });
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    const student_id = document.getElementById('studentId').value.trim();
+    const name = document.getElementById('studentName').value.trim();
+    const department = document.getElementById('department').value.trim();
+
+    if (!student_id || !name) {
+      alert('Please fill out Student ID and Name.');
+      return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = 'Capturing 5 face samples... Please look at camera...';
+    alertBox.style.display = 'block';
+    alertBox.style.color = '#f59e0b';
+    alertBox.textContent = 'Recording webcam face samples...';
+
+    try {
+      const res = await fetch('/api/register_student', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ student_id, name, department })
+      });
+
+      const data = await res.json();
+      if (data.success) {
+        alertBox.style.color = '#10b981';
+        alertBox.textContent = '✓ ' + data.message;
+        form.reset();
+        document.getElementById('department').value = 'Computer Science';
+        loadStudents();
+      } else {
+        alertBox.style.color = '#ef4444';
+        alertBox.textContent = '❌ ' + data.message;
+      }
+    } catch (err) {
+      alertBox.style.color = '#ef4444';
+      alertBox.textContent = 'Error connecting to server.';
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '📷 Capture Face & Save Student';
+    }
+  });
+
+  loadStudents();
+</script>
+{% endblock %}

@@ -1,0 +1,126 @@
+{% extends 'base.html' %}
+
+{% block title %}Attendance Log Reports - Face Attendance System{% endblock %}
+
+{% block content %}
+<div class="card">
+  <div class="card-title">
+    <span>📊 Attendance Log & Excel Reports</span>
+    <div style="display: flex; gap: 0.5rem;">
+      <a href="/api/export_excel" class="btn btn-success" style="padding: 0.5rem 1rem; font-size: 0.85rem; background: linear-gradient(135deg, #10b981, #047857);">
+        📥 Download Excel (.xlsx)
+      </a>
+      <a href="/api/export_csv" class="btn" style="padding: 0.5rem 1rem; font-size: 0.85rem; background: rgba(59, 130, 246, 0.2); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.3);">
+        📄 Download CSV
+      </a>
+    </div>
+  </div>
+
+  <!-- Session Filters -->
+  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 1rem;">
+    <div class="form-group" style="max-width: 350px; margin: 0;">
+      <input type="text" id="searchInput" class="form-control" placeholder="Search by Student ID, Name or Date...">
+    </div>
+
+    <div style="display: flex; gap: 0.5rem;">
+      <button type="button" class="btn" id="btnFilterAll" onclick="filterSession('all')" style="padding: 0.4rem 0.85rem; font-size: 0.85rem; background: rgba(59, 130, 246, 0.2); color: white; border: 1px solid rgba(59, 130, 246, 0.4);">
+        All Logs
+      </button>
+      <button type="button" class="btn" id="btnFilterBefore" onclick="filterSession('before_lunch')" style="padding: 0.4rem 0.85rem; font-size: 0.85rem; background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.3);">
+        ☀️ Before Lunch
+      </button>
+      <button type="button" class="btn" id="btnFilterAfter" onclick="filterSession('after_lunch')" style="padding: 0.4rem 0.85rem; font-size: 0.85rem; background: rgba(245, 158, 11, 0.15); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.3);">
+        🍱 After Lunch
+      </button>
+    </div>
+  </div>
+
+  <div class="data-table-wrapper">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Log ID</th>
+          <th>Student ID</th>
+          <th>Full Name</th>
+          <th>Department</th>
+          <th>Date</th>
+          <th>Time</th>
+          <th>Session</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody id="reportsTableBody">
+        <tr>
+          <td colspan="8" style="text-align: center; color: var(--text-muted);">Loading records...</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  let allRecords = [];
+  let currentSessionFilter = 'all';
+
+  async function loadReports(sessionParam = 'all') {
+    try {
+      const res = await fetch(`/api/reports?session=${sessionParam}`);
+      allRecords = await res.json();
+      renderTable(allRecords);
+    } catch (err) {
+      console.error('Failed to load reports:', err);
+    }
+  }
+
+  function filterSession(session) {
+    currentSessionFilter = session;
+    loadReports(session);
+  }
+
+  function renderTable(records) {
+    const tbody = document.getElementById('reportsTableBody');
+    if (!records || records.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="8" style="text-align: center; color: var(--text-muted);">No attendance records found for this selection.</td></tr>`;
+      return;
+    }
+
+    tbody.innerHTML = records.map(r => `
+      <tr>
+        <td>#${r.id}</td>
+        <td><strong>${r.student_id}</strong></td>
+        <td>${r.name}</td>
+        <td>${r.department}</td>
+        <td>${r.date}</td>
+        <td>${r.time}</td>
+        <td>
+          <span style="font-size: 0.8rem; font-weight: 600; color: ${r.session === 'Before Lunch' ? '#10b981' : '#f59e0b'};">
+            ${r.session === 'Before Lunch' ? '☀️' : '🍱'} ${r.session}
+          </span>
+        </td>
+        <td><span class="status-tag status-present">PRESENT ✓</span></td>
+      </tr>
+    `).join('');
+  }
+
+  document.getElementById('searchInput').addEventListener('input', (e) => {
+    const query = e.target.value.toLowerCase().trim();
+    if (!query) {
+      renderTable(allRecords);
+      return;
+    }
+
+    const filtered = allRecords.filter(r => 
+      r.student_id.toLowerCase().includes(query) ||
+      r.name.toLowerCase().includes(query) ||
+      r.department.toLowerCase().includes(query) ||
+      r.date.includes(query) ||
+      r.session.toLowerCase().includes(query)
+    );
+    renderTable(filtered);
+  });
+
+  loadReports();
+</script>
+{% endblock %}

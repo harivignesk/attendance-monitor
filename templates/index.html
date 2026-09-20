@@ -1,0 +1,163 @@
+{% extends 'base.html' %}
+
+{% block title %}Live Attendance Scanner - Face Recognition Machine{% endblock %}
+
+{% block content %}
+<div class="grid-layout">
+  
+  <!-- Left Side: Live Video Stream -->
+  <div class="card">
+    <div class="card-title">
+      <span>📷 Live Camera Stream</span>
+      <span style="font-size: 0.85rem; color: var(--accent-green); font-weight: 500;" id="sessionBadge">
+        ⏳ Session: Loading...
+      </span>
+    </div>
+
+    <!-- Live Voice & Attendance Granted Banner Overlay -->
+    <div id="grantedBanner" style="display: none; padding: 0.85rem 1.25rem; border-radius: 10px; font-weight: 700; margin-bottom: 1rem; transition: all 0.3s ease;"></div>
+
+    <div class="video-wrapper">
+      <div class="live-badge">
+        <div class="live-dot"></div>
+        LIVE REC
+      </div>
+      <img src="{{ url_for('video_feed') }}" alt="Live OpenCV Camera Feed" id="videoFeed">
+    </div>
+  </div>
+
+  <!-- Right Side: Stats Counters & Activity Stream -->
+  <div class="card">
+    <div class="card-title">
+      <span>Today's Sessions Overview</span>
+      <span style="font-size: 0.8rem; color: var(--text-muted);" id="currentTime"></span>
+    </div>
+
+    <!-- Metric Counters (Before Lunch / After Lunch) -->
+    <div class="metrics-row" style="grid-template-columns: 1fr 1fr 1fr; gap: 0.75rem;">
+      <div class="metric-card" style="padding: 0.85rem;">
+        <div class="metric-label" style="font-size: 0.7rem;">Before Lunch</div>
+        <div class="metric-value val-green" id="statBefore" style="font-size: 1.5rem;">0</div>
+      </div>
+      <div class="metric-card" style="padding: 0.85rem;">
+        <div class="metric-label" style="font-size: 0.7rem;">After Lunch</div>
+        <div class="metric-value val-blue" id="statAfter" style="font-size: 1.5rem;">0</div>
+      </div>
+      <div class="metric-card" style="padding: 0.85rem;">
+        <div class="metric-label" style="font-size: 0.7rem;">Total Students</div>
+        <div class="metric-value" style="font-size: 1.5rem; color: #f59e0b;" id="statTotal">0</div>
+      </div>
+    </div>
+
+    <!-- Live Activity Log -->
+    <h3 style="font-size: 0.95rem; font-weight: 600; margin-bottom: 0.75rem; color: var(--text-muted);">
+      ⚡ Live Stream Announcements
+    </h3>
+    <ul class="activity-log" id="activityLog">
+      <li class="activity-item">
+        <div class="activity-info">
+          <h4>Waiting for faces...</h4>
+          <p>System will announce names & mark Before/After Lunch attendance.</p>
+        </div>
+      </li>
+    </ul>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  let lastSpokenLog = "";
+
+  function updateTime() {
+    const now = new Date();
+    document.getElementById('currentTime').textContent = now.toLocaleTimeString();
+  }
+  setInterval(updateTime, 1000);
+  updateTime();
+
+  function speakText(text) {
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel(); // Stop any pending speech
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.rate = 0.95;
+      utterance.pitch = 1.0;
+      window.speechSynthesis.speak(utterance);
+    }
+  }
+
+  function showBanner(message, type) {
+    const banner = document.getElementById('grantedBanner');
+    banner.style.display = 'block';
+    banner.textContent = message;
+
+    if (type === 'granted') {
+      banner.style.background = 'rgba(16, 185, 129, 0.2)';
+      banner.style.color = '#10b981';
+      banner.style.border = '1px solid #10b981';
+    } else if (type === 'already') {
+      banner.style.background = 'rgba(245, 158, 11, 0.2)';
+      banner.style.color = '#f59e0b';
+      banner.style.border = '1px solid #f59e0b';
+    } else {
+      banner.style.background = 'rgba(239, 68, 68, 0.2)';
+      banner.style.color = '#ef4444';
+      banner.style.border = '1px solid #ef4444';
+    }
+
+    setTimeout(() => {
+      banner.style.display = 'none';
+    }, 4000);
+  }
+
+  async function fetchStats() {
+    try {
+      const res = await fetch('/api/stats');
+      const data = await res.json();
+      
+      document.getElementById('statBefore').textContent = data.before_lunch_count;
+      document.getElementById('statAfter').textContent = data.after_lunch_count;
+      document.getElementById('statTotal').textContent = data.total_students;
+      document.getElementById('sessionBadge').textContent = '⏱️ Session: ' + data.current_session;
+
+      const logList = document.getElementById('activityLog');
+      if (data.recent_logs && data.recent_logs.length > 0) {
+        logList.innerHTML = data.recent_logs.map(log => `
+          <li class="activity-item">
+            <div class="activity-info">
+              <h4>${log.name} (${log.student_id})</h4>
+              <p>${log.department} • Time: ${log.time} • <strong>${log.session}</strong></p>
+            </div>
+            <span class="status-tag status-present">PRESENT ✓</span>
+          </li>
+        `).join('');
+
+        // Trigger browser audio announcement on latest log
+        const latest = data.recent_logs[0];
+        const logKey = `${latest.student_id}_${latest.session}_${latest.time}`;
+        if (logKey !== lastSpokenLog) {
+          lastSpokenLog = logKey;
+          const msg = `Welcome ${latest.name}! Attendance Granted for ${latest.session}.`;
+          showBanner(msg, 'granted');
+          speakText(msg);
+        }
+      } else {
+        logList.innerHTML = `
+          <li class="activity-item">
+            <div class="activity-info">
+              <h4>No attendance marked today yet.</h4>
+              <p>Look into webcam feed to mark attendance.</p>
+            </div>
+          </li>
+        `;
+      }
+    } catch (err) {
+      console.error('Error fetching stats:', err);
+    }
+  }
+
+  setInterval(fetchStats, 2000);
+  fetchStats();
+</script>
+{% endblock %}
